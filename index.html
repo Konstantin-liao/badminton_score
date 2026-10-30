@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>羽球語音記分板</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700;900&family=DM+Mono:wght@500&display=swap">
+<style>
+/* Layout: setup card, then a full-screen two-half scoreboard (left half = left side of the net). */
+:root {
+  --bg: #eef2f6;
+  --surface: #ffffff;
+  --fg: #14202e;
+  --muted: #5b6b7c;
+  --line: #d6dee7;
+  --accent: #1f55c9;
+  --accent-fg: #ffffff;
+  --left: #1f55c9;
+  --right: #c2410c;
+  --side-fg: #ffffff;
+  --serve: #f6d84a;
+  --serve-fg: #3b3000;
+  --warn: #b8470f;
+  --ok: #17794f;
+  --scrim: rgba(10, 20, 35, .6);
+  --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d141c; --surface: #17212c; --fg: #e7eef6; --muted: #93a4b6; --line: #28374a;
+    --accent: #6c9bff; --accent-fg: #08142e; --left: #2b5fd6; --right: #c4501c; --side-fg: #ffffff;
+    --serve: #e9c93a; --serve-fg: #2b2300; --warn: #ff9a66; --ok: #5ed39b; --scrim: rgba(0, 0, 0, .65); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d141c; --surface: #17212c; --fg: #e7eef6; --muted: #93a4b6; --line: #28374a;
+  --accent: #6c9bff; --accent-fg: #08142e; --left: #2b5fd6; --right: #c4501c; --side-fg: #ffffff;
+  --serve: #e9c93a; --serve-fg: #2b2300; --warn: #ff9a66; --ok: #5ed39b; --scrim: rgba(0, 0, 0, .65); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.5;
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: max(12px, env(safe-area-inset-left, 0px)); padding-right: max(12px, env(safe-area-inset-right, 0px));
+}
+button, input, select { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* setup */
+.setup { max-width: 520px; margin: 0 auto; padding-block: 20px 32px; display: flex; flex-direction: column; gap: 16px; }
+h1 { margin: 0; font-size: 1.5rem; font-weight: 900; }
+.sub { color: var(--muted); font-size: .875rem; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label, .lbl { font-weight: 700; font-size: .9375rem; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+input[type="text"], input[type="number"] { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; border-left: 1px solid var(--line); background: var(--bg); padding: 10px 6px; min-height: 46px; cursor: pointer; }
+.seg button:first-child { border-left: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); font-weight: 700; }
+.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.check input { width: 20px; height: 20px; accent-color: var(--accent); }
+.big { min-height: 58px; border: 0; border-radius: 14px; background: var(--accent); color: var(--accent-fg); font-weight: 900; font-size: 1.25rem; letter-spacing: .1em; cursor: pointer; }
+.cmds { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; font-size: .9375rem; }
+.cmds b { font-weight: 700; }
+.warnbox { color: var(--warn); font-size: .875rem; }
+.hist { display: flex; flex-direction: column; gap: 4px; font-size: .9375rem; }
+.hist .meta { font-family: var(--font-mono); color: var(--muted); font-size: .8125rem; }
+
+/* game */
+.game { height: 100%; display: flex; flex-direction: column; gap: 8px; padding-block: 8px; }
+.top { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tb { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 8px 12px; min-height: 44px; cursor: pointer; font-size: .9375rem; }
+.tb.mic { font-weight: 700; }
+.tb.mic[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
+.spacer { flex: 1; }
+.rule { font-size: .8125rem; color: var(--muted); font-family: var(--font-mono); }
+.board { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-height: 0; }
+.half { position: relative; border: 0; border-radius: 18px; color: var(--side-fg); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 12px 8px; min-width: 0; overflow: hidden; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+.half.l { background: var(--left); }
+.half.r { background: var(--right); }
+.half .name { font-weight: 700; font-size: clamp(1rem, 4vw, 1.75rem); overflow-wrap: anywhere; text-align: center; max-width: 100%; }
+.half .score { font-family: var(--font-mono); font-weight: 500; font-size: clamp(5rem, 24vw, 16rem); line-height: 1; font-variant-numeric: tabular-nums; }
+.half .tap { font-size: .8125rem; opacity: .8; }
+.half .srv { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--serve); color: var(--serve-fg); border-radius: 999px; padding: 2px 12px; font-weight: 900; font-size: clamp(.875rem, 3vw, 1.125rem); white-space: nowrap; }
+.half.bump .score { animation: bump .45s ease-out; }
+@keyframes bump { 0% { transform: scale(1.25); } 100% { transform: scale(1); } }
+.status { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; min-height: 3em; }
+.heard { font-size: .9375rem; color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.heard b { color: var(--fg); }
+.call { font-weight: 900; font-size: 1.125rem; }
+.msg { grid-column: 1 / -1; font-size: .875rem; color: var(--warn); min-height: 1.2em; }
+
+/* end overlay */
+.end { position: fixed; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+.end-in { background: var(--surface); border-radius: 18px; padding: 24px 20px; width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 14px; text-align: center; }
+.end-in .w { font-size: 1.75rem; font-weight: 900; overflow-wrap: anywhere; }
+.end-in .fs { font-family: var(--font-mono); font-size: 3rem; font-variant-numeric: tabular-nums; }
+.end-in .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.end-in .tb { min-height: 52px; }
+@media (prefers-reduced-motion: reduce) { .half.bump .score { animation: none; } }
+</style>
+</head>
+<body>
+
+<div class="setup" id="setup">
+  <div>
+    <h1>羽球語音記分板</h1>
+    <div class="sub">說「左邊」或「右邊」就幫那邊加分。手機放在網柱旁、螢幕朝向場內最方便。</div>
+  </div>
+
+  <section class="panel">
+    <div class="two">
+      <div class="field"><label for="nL">左邊隊名</label><input type="text" id="nL" placeholder="左邊"></div>
+      <div class="field"><label for="nR">右邊隊名</label><input type="text" id="nR" placeholder="右邊"></div>
+    </div>
+    <div class="sub">隊名可以留空。填了的話，喊隊名也能加分，例如「藍隊得分」。</div>
+  </section>
+
+  <section class="panel">
+    <div class="lbl">一局打幾分</div>
+    <div class="seg" role="group" aria-label="一局打幾分" id="tgtSeg">
+      <button type="button" data-v="11">11 分</button>
+      <button type="button" data-v="15">15 分</button>
+      <button type="button" data-v="21">21 分</button>
+      <button type="button" data-v="0">自訂</button>
+    </div>
+    <div class="two" id="customRow" hidden>
+      <div class="field"><label for="tgt">自訂分數</label><input type="number" id="tgt" min="3" max="50" inputmode="numeric"></div>
+      <div></div>
+    </div>
+    <label class="check"><input type="checkbox" id="deuce"> 平分後要領先 2 分才算贏</label>
+    <div class="two" id="capRow">
+      <div class="field"><label for="cap">最多打到幾分（封頂）</label><input type="number" id="cap" min="3" max="60" inputmode="numeric"></div>
+      <div></div>
+    </div>
+    <div class="sub" id="ruleNote"></div>
+  </section>
+
+  <section class="panel">
+    <div class="lbl">誰先發球</div>
+    <div class="seg" role="group" aria-label="誰先發球" id="srvSeg">
+      <button type="button" data-v="L">左邊</button>
+      <button type="button" data-v="R">右邊</button>
+    </div>
+    <label class="check"><input type="checkbox" id="tts"> 加分後唸出比分</label>
+  </section>
+
+  <section class="panel">
+    <div class="lbl">語音指令</div>
+    <ul class="cmds">
+      <li>「<b>左邊</b>」或「<b>左邊得分</b>」：左邊加 1 分</li>
+      <li>「<b>右邊</b>」或「<b>右邊得分</b>」：右邊加 1 分</li>
+      <li>「<b>取消</b>」或「<b>上一分</b>」：退回上一分</li>
+    </ul>
+    <div class="sub">聽不清楚時也可以直接點左右兩半加分。換場地後按「換邊」，左右會跟著對調。</div>
+    <div class="warnbox" id="support"></div>
+  </section>
+
+  <button class="big" id="start" type="button">開始比賽</button>
+
+  <section class="panel" id="histBox" hidden>
+    <div class="row" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <div class="lbl">最近的比賽</div>
+      <button class="tb" id="histClear" type="button">清除</button>
+    </div>
+    <div class="hist" id="hist"></div>
+  </section>
+</div>
+
+<div class="game" id="game" hidden>
+  <div class="top">
+    <button class="tb mic" id="mic" type="button" aria-pressed="false">開啟語音</button>
+    <button class="tb" id="undo" type="button">取消上一分</button>
+    <button class="tb" id="swap" type="button">換邊</button>
+    <span class="spacer"></span>
+    <span class="rule" id="ruleTag"></span>
+    <button class="tb" id="quit" type="button">結束</button>
+  </div>
+  <div class="board" id="board">
+    <button class="half l" id="hL" type="button"><span class="srv" id="sL" hidden></span><span class="name" id="tL"></span><span class="score" id="cL">0</span><span class="tap">點這裡加分</span></button>
+    <button class="half r" id="hR" type="button"><span class="srv" id="sR" hidden></span><span class="name" id="tR"></span><span class="score" id="cR">0</span><span class="tap">點這裡加分</span></button>
+  </div>
+  <div class="status">
+    <div class="heard" id="heard">語音還沒開啟</div>
+    <div class="call" id="callTxt" aria-live="polite"></div>
+    <div class="msg" id="msg" role="status"></div>
+  </div>
+</div>
+
+<div class="end" id="end" hidden role="dialog" aria-modal="true" aria-labelledby="endW">
+  <div class="end-in">
+    <div class="sub">比賽結束</div>
+    <div class="w" id="endW"></div>
+    <div class="fs" id="endS"></div>
+    <div class="row">
+      <button class="tb" id="endUndo" type="button">取消最後一分</button>
+      <button class="big" id="again" type="button" style="font-size:1.0625rem;letter-spacing:.04em">再來一局</button>
+    </div>
+    <button class="tb" id="toSetup" type="button">回到設定</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const KEY = "badminton-score-v1";
+
+  // ---------- settings & state ----------
+  let cfg = { nL: "", nR: "", target: 21, deuce: true, cap: 30, first: "L", tts: true };
+  // Teams are fixed (0 and 1); `leftTeam` says which one is currently on the left side of the net.
+  let g = null;      // { score:[0,0], server:0|1, leftTeam:0|1, stack:[], done:false }
+  let hist = [];
+
+  function save() { try { localStorage.setItem(KEY, JSON.stringify({ cfg, g, hist })); } catch (e) {} }
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY) || "null");
+      if (s) { cfg = Object.assign(cfg, s.cfg || {}); g = s.g || null; hist = s.hist || []; }
+    } catch (e) {}
+  }
+
+  const teamName = (t) => (t === 0 ? cfg.nL.trim() || "左邊隊" : cfg.nR.trim() || "右邊隊");
+  const sideTeam = (side) => (side === "L" ? g.leftTeam : 1 - g.leftTeam);
+
+  // ---------- rules ----------
+  function winner(sc) {
+    for (const t of [0, 1]) {
+      const a = sc[t], b = sc[1 - t];
+      if (a >= cfg.cap) return t;
+      if (a >= cfg.target && (!cfg.deuce || a - b >= 2)) return t;
+    }
+    return -1;
+  }
+  // Server's own score decides the court: even = right service court, odd = left.
+  const serveCourt = () => (g.score[g.server] % 2 === 0 ? "右區" : "左區");
+  function pointState() {
+    const s = g.score;
+    for (const t of [0, 1]) {
+      const test = s.slice(); test[t]++;
+      if (winner(test) === t) return { t, kind: "point" };
+    }
+    return null;
+  }
+
+  // ---------- sound ----------
+  let ac = null;
+  function beep(up) {
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === "suspended") ac.resume();
+      const o = ac.createOscillator(), gn = ac.createGain(), t = ac.currentTime;
+      o.type = "sine"; o.frequency.setValueAtTime(up ? 880 : 440, t);
+      if (up) o.frequency.setValueAtTime(1320, t + 0.08);
+      gn.gain.setValueAtTime(0.15, t); gn.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+      o.connect(gn).connect(ac.destination); o.start(t); o.stop(t + 0.3);
+    } catch (e) {}
+  }
+  let speakingUntil = 0;
+  function say(text) {
+    if (!cfg.tts || !("speechSynthesis" in window)) return;
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "zh-TW"; u.rate = 1.05;
+      const v = speechSynthesis.getVoices().find((x) => /zh[-_]TW/i.test(x.lang)) || speechSynthesis.getVoices().find((x) => /^zh/i.test(x.lang));
+      if (v) u.voice = v;
+      speakingUntil = Date.now() + 4000;
+      u.onend = () => { speakingUntil = Date.now() + 400; };
+      speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+  // Badminton call: server's score first.
+  function callText() {
+    const a = g.score[g.server], b = g.score[1 - g.server];
+    let t = a === b ? a + " 平" : a + " 比 " + b;
+    const ps = pointState();
+    if (ps) t += "，" + teamName(ps.t) + "局點";
+    return t;
+  }
+
+  // ---------- scoring ----------
+  function addPoint(side, how) {
+    if (!g || g.done) return;
+    const t = sideTeam(side);
+    g.stack.push({ score: g.score.slice(), server: g.server });
+    g.score[t]++;
+    g.server = t;
+    beep(true);
+    const w = winner(g.score);
+    if (w >= 0) {
+      g.done = true;
+      save(); render(side);
+      finish(w);
+      return;
+    }
+    save(); render(side);
+    $("callTxt").textContent = callText();
+    say(callText());
+    if (how) flash("");
+  }
+  function undo() {
+    if (!g || !g.stack.length) { flash("還沒有分數可以退回"); return; }
+    const p = g.stack.pop();
+    g.score = p.score; g.server = p.server; g.done = false;
+    $("end").hidden = true;
+    beep(false);
+    save(); render();
+    $("callTxt").textContent = "退回：" + callText();
+    say("取消，" + callText());
+  }
+  function swapEnds() {
+    if (!g) return;
+    g.leftTeam = 1 - g.leftTeam;
+    save(); render();
+    flash("已換邊：" + teamName(g.leftTeam) + " 現在在左邊");
+    say("換邊");
+  }
+  function finish(w) {
+    const s = g.score;
+    hist.unshift({ at: Date.now(), names: [teamName(0), teamName(1)], score: s.slice(), w });
+    hist = hist.slice(0, 20);
+    save();
+    $("endW").textContent = teamName(w) + " 獲勝";
+    $("endS").textContent = s[w] + " : " + s[1 - w];
+    $("end").hidden = false;
+    $("again").focus();
+    say("比賽結束，" + teamName(w) + " " + s[w] + " 比 " + s[1 - w] + " 獲勝");
+    renderHist();
+  }
+  function newGame() {
+    g = { score: [0, 0], server: cfg.first === "L" ? 0 : 1, leftTeam: 0, stack: [], done: false };
+    save();
+  }
+
+  // ---------- speech recognition ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, listening = false, lastCmd = 0;
+  function norm(s) { return String(s).replace(/[\s，。,.!！?？、]/g, ""); }
+  function interpret(text) {
+    const t = norm(text);
+    if (!t) return null;
+    if (/取消|上一分|退回|撤銷|撤回|收回/.test(t)) return "undo";
+    const nL = norm(teamName(g.leftTeam)), nR = norm(teamName(1 - g.leftTeam));
+    const custom = (n) => n && !/^(左邊隊|右邊隊)$/.test(n) && t.includes(n);
+    const left = /左|佐/.test(t) || custom(nL);
+    const right = /右|佑/.test(t) || custom(nR);
+    if (left && !right) return "L";
+    if (right && !left) return "R";
+    return null;
+  }
+  function onHeard(text, final) {
+    const h = $("heard"); h.textContent = "";
+    h.appendChild(document.createTextNode(final ? "聽到：" : "聽到…"));
+    const b = document.createElement("b"); b.textContent = text; h.appendChild(b);
+    if (!final) return;
+    if (Date.now() < speakingUntil) return;          // ignore our own voice
+    if (Date.now() - lastCmd < 1200) return;          // ignore double triggers
+    const c = interpret(text);
+    if (!c) { flash("沒聽懂「" + text + "」，請說「左邊」、「右邊」或「取消」"); return; }
+    lastCmd = Date.now();
+    if (c === "undo") undo(); else addPoint(c, "voice");
+  }
+  function startRec() {
+    if (!SR) { flash("這個瀏覽器不支援語音辨識，請改用 Chrome 或 Safari，或直接點畫面加分"); return; }
+    rec = new SR();
+    rec.lang = "zh-TW";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 3;
+    rec.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) {
+          // take the first alternative that means something
+          let pick = r[0].transcript;
+          for (let k = 0; k < r.length; k++) if (interpret(r[k].transcript)) { pick = r[k].transcript; break; }
+          onHeard(pick.trim(), true);
+        } else onHeard(r[0].transcript.trim(), false);
+      }
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") { setMic(false); flash("沒有麥克風權限。請在瀏覽器設定允許這個網站使用麥克風"); }
+      else if (e.error === "network") flash("語音辨識需要網路，目前連不上。可以先直接點畫面加分");
+      else if (e.error === "audio-capture") { setMic(false); flash("找不到麥克風"); }
+    };
+    rec.onend = () => { if (listening) setTimeout(() => { if (listening) { try { rec.start(); } catch (e) {} } }, 250); };
+    try { rec.start(); } catch (e) {}
+  }
+  function setMic(on) {
+    listening = on;
+    $("mic").setAttribute("aria-pressed", on);
+    $("mic").textContent = on ? "語音開啟中" : "開啟語音";
+    if (on) { $("heard").textContent = "請說「左邊」、「右邊」或「取消」"; startRec(); }
+    else { try { rec && rec.abort(); } catch (e) {} rec = null; $("heard").textContent = "語音已關閉，可以直接點畫面加分"; }
+  }
+
+  // ---------- wake lock ----------
+  let lock = null;
+  async function wake(on) {
+    try {
+      if (on && !lock && navigator.wakeLock && document.visibilityState === "visible") { lock = await navigator.wakeLock.request("screen"); lock.addEventListener("release", () => (lock = null)); }
+      else if (!on && lock) { await lock.release(); lock = null; }
+    } catch (e) {}
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!$("game").hidden) wake(true);
+    if (document.visibilityState === "visible" && listening && rec) { try { rec.start(); } catch (e) {} }
+  });
+
+  // ---------- render ----------
+  function flash(t) { $("msg").textContent = t; }
+  function render(bumpSide) {
+    if (!g) return;
+    const lt = g.leftTeam, rt = 1 - lt;
+    $("tL").textContent = teamName(lt); $("tR").textContent = teamName(rt);
+    $("cL").textContent = g.score[lt]; $("cR").textContent = g.score[rt];
+    $("hL").className = "half " + (lt === 0 ? "l" : "r");
+    $("hR").className = "half " + (rt === 0 ? "l" : "r");
+    const srvSide = g.server === lt ? "L" : "R";
+    $("sL").hidden = srvSide !== "L"; $("sR").hidden = srvSide !== "R";
+    $("s" + srvSide).textContent = "發球・" + serveCourt();
+    $("hL").setAttribute("aria-label", teamName(lt) + " " + g.score[lt] + " 分，點一下加分");
+    $("hR").setAttribute("aria-label", teamName(rt) + " " + g.score[rt] + " 分，點一下加分");
+    if (bumpSide) { const h = $("h" + bumpSide); h.classList.remove("bump"); void h.offsetWidth; h.classList.add("bump"); }
+    $("ruleTag").textContent = cfg.target + " 分" + (cfg.deuce ? "・延長到 " + cfg.cap : "");
+  }
+  function renderSetup() {
+    $("nL").value = cfg.nL; $("nR").value = cfg.nR;
+    const preset = [11, 15, 21].includes(cfg.target);
+    [...$("tgtSeg").children].forEach((b) => b.setAttribute("aria-pressed", preset ? +b.dataset.v === cfg.target : b.dataset.v === "0"));
+    $("customRow").hidden = preset;
+    $("tgt").value = cfg.target;
+    $("deuce").checked = cfg.deuce; $("cap").value = cfg.cap; $("capRow").hidden = !cfg.deuce;
+    [...$("srvSeg").children].forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === cfg.first));
+    $("tts").checked = cfg.tts;
+    $("ruleNote").textContent = cfg.deuce
+      ? "先到 " + cfg.target + " 分；" + (cfg.target - 1) + " 平之後要領先 2 分，最多打到 " + cfg.cap + " 分（先到 " + cfg.cap + " 分的贏）。"
+      : "先到 " + cfg.target + " 分就贏，不延長。";
+    renderHist();
+  }
+  function renderHist() {
+    const box = $("hist"); box.innerHTML = "";
+    $("histBox").hidden = !hist.length;
+    hist.forEach((h) => {
+      const d = new Date(h.at);
+      const row = document.createElement("div");
+      const meta = document.createElement("span"); meta.className = "meta";
+      meta.textContent = String(d.getMonth() + 1).padStart(2, "0") + "/" + String(d.getDate()).padStart(2, "0") + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + "  ";
+      row.appendChild(meta);
+      row.appendChild(document.createTextNode(h.names[0] + " " + h.score[0] + " : " + h.score[1] + " " + h.names[1] + "（" + h.names[h.w] + "勝）"));
+      box.appendChild(row);
+    });
+  }
+  function showGame(on) {
+    $("setup").hidden = on; $("game").hidden = !on;
+    wake(on);
+    if (on) render(); else { setMic(false); renderSetup(); }
+  }
+
+  // ---------- wiring ----------
+  load();
+  if (!SR) $("support").textContent = "這個瀏覽器不支援語音辨識，還是可以用點的記分。建議用 Android 的 Chrome 或 iPhone 的 Safari。";
+  else if (location.protocol === "file:") $("support").textContent = "直接從檔案開啟時麥克風可能被擋，放到 GitHub Pages（https 網址）上使用最穩。";
+
+  $("nL").addEventListener("input", () => { cfg.nL = $("nL").value; save(); });
+  $("nR").addEventListener("input", () => { cfg.nR = $("nR").value; save(); });
+  $("tgtSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const v = +b.dataset.v;
+    if (v) { cfg.target = v; cfg.cap = v === 21 ? 30 : v === 15 ? 21 : 15; }
+    else { $("customRow").hidden = false; [...$("tgtSeg").children].forEach((x) => x.setAttribute("aria-pressed", x === b)); $("tgt").focus(); return; }
+    save(); renderSetup();
+  });
+  $("tgt").addEventListener("change", () => {
+    const v = Math.max(3, Math.min(50, parseInt($("tgt").value, 10) || 21));
+    cfg.target = v; if (cfg.cap < v) cfg.cap = v + 9; save(); renderSetup();
+  });
+  $("deuce").addEventListener("change", () => { cfg.deuce = $("deuce").checked; save(); renderSetup(); });
+  $("cap").addEventListener("change", () => { cfg.cap = Math.max(cfg.target, Math.min(60, parseInt($("cap").value, 10) || cfg.target)); save(); renderSetup(); });
+  $("srvSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; cfg.first = b.dataset.v; save(); renderSetup(); });
+  $("tts").addEventListener("change", () => { cfg.tts = $("tts").checked; save(); });
+  $("start").addEventListener("click", () => {
+    newGame(); showGame(true);
+    // speech synthesis on iOS must be unlocked from a tap
+    if (cfg.tts && "speechSynthesis" in window) { try { speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch (e) {} }
+    $("callTxt").textContent = teamName(g.server) + " 先發球";
+    setMic(true);
+  });
+  $("hL").addEventListener("click", () => addPoint("L"));
+  $("hR").addEventListener("click", () => addPoint("R"));
+  $("undo").addEventListener("click", undo);
+  $("endUndo").addEventListener("click", undo);
+  $("swap").addEventListener("click", swapEnds);
+  $("mic").addEventListener("click", () => setMic(!listening));
+  $("quit").addEventListener("click", () => { $("end").hidden = true; showGame(false); });
+  $("again").addEventListener("click", () => { $("end").hidden = true; newGame(); render(); $("callTxt").textContent = teamName(g.server) + " 先發球"; flash(""); });
+  $("toSetup").addEventListener("click", () => { $("end").hidden = true; showGame(false); });
+  $("histClear").addEventListener("click", () => { hist = []; save(); renderHist(); });
+  document.addEventListener("keydown", (e) => {
+    if ($("game").hidden || e.target.tagName === "INPUT") return;
+    if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); addPoint("L"); }
+    else if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); addPoint("R"); }
+    else if (e.key === "Backspace" || e.key === "z") { e.preventDefault(); undo(); }
+  });
+  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};
+
+  renderSetup();
+  if (g && !g.done && (g.score[0] || g.score[1])) { showGame(true); $("callTxt").textContent = "已接續上次的比分：" + callText(); $("heard").textContent = "按「開啟語音」繼續用說的記分"; }
+})();
+</script>
+</body>
+</html>
