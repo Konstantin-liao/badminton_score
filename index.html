@@ -111,7 +111,7 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
 <div class="setup" id="setup">
   <div>
     <h1>羽球語音記分板</h1>
-    <div class="sub">說「左邊」或「右邊」就幫那邊加分。手機放在網柱旁、螢幕朝向場內最方便。</div>
+    <div class="sub">說「左邊得分」或「右邊得分」就幫那邊加分。手機放在網柱旁、螢幕朝向場內最方便。</div>
   </div>
 
   <section class="panel">
@@ -119,7 +119,7 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
       <div class="field"><label for="nL">左邊隊名</label><input type="text" id="nL" placeholder="左邊"></div>
       <div class="field"><label for="nR">右邊隊名</label><input type="text" id="nR" placeholder="右邊"></div>
     </div>
-    <div class="sub">隊名可以留空。填了的話，喊隊名也能加分，例如「藍隊得分」。</div>
+    <div class="sub">隊名可以留空。填了的話，喊隊名也能加分，例如「藍隊得分」。隊名取兩個字以上、彼此聽起來不像（例如「藍隊」「紅隊」），辨識會比較準。</div>
   </section>
 
   <section class="panel">
@@ -153,11 +153,8 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
 
   <section class="panel">
     <div class="lbl">語音指令</div>
-    <ul class="cmds">
-      <li>「<b>左邊</b>」或「<b>左邊得分</b>」：左邊加 1 分</li>
-      <li>「<b>右邊</b>」或「<b>右邊得分</b>」：右邊加 1 分</li>
-      <li>「<b>取消</b>」或「<b>上一分</b>」：退回上一分</li>
-    </ul>
+    <ul class="cmds" id="cmdList"></ul>
+    <label class="check"><input type="checkbox" id="req"> 一定要說「得分」才算（建議開著，旁人聊天不會被誤加分）</label>
     <div class="sub">聽不清楚時也可以直接點左右兩半加分。換場地後按「換邊」，左右會跟著對調。</div>
     <div class="warnbox" id="support"></div>
   </section>
@@ -212,7 +209,7 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
   const KEY = "badminton-score-v1";
 
   // ---------- settings & state ----------
-  let cfg = { nL: "", nR: "", target: 21, deuce: true, cap: 30, first: "L", tts: true };
+  let cfg = { nL: "", nR: "", target: 21, deuce: true, cap: 30, first: "L", tts: true, requireScore: true };
   // Teams are fixed (0 and 1); `leftTeam` says which one is currently on the left side of the net.
   let g = null;      // { score:[0,0], server:0|1, leftTeam:0|1, stack:[], done:false }
   let hist = [];
@@ -221,7 +218,7 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(KEY) || "null");
-      if (s) { cfg = Object.assign(cfg, s.cfg || {}); g = s.g || null; hist = s.hist || []; }
+      if (s) { cfg = Object.assign(cfg, s.cfg || {}); if (cfg.requireScore == null) cfg.requireScore = true; g = s.g || null; hist = s.hist || []; }
     } catch (e) {}
   }
 
@@ -341,31 +338,68 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
   // ---------- speech recognition ----------
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let rec = null, listening = false, lastCmd = 0;
-  function norm(s) { return String(s).replace(/[\s，。,.!！?？、]/g, ""); }
-  function interpret(text) {
-    const t = norm(text);
-    if (!t) return null;
-    if (/取消|上一分|退回|撤銷|撤回|收回/.test(t)) return "undo";
-    const nL = norm(teamName(g.leftTeam)), nR = norm(teamName(1 - g.leftTeam));
-    const custom = (n) => n && !/^(左邊隊|右邊隊)$/.test(n) && t.includes(n);
-    const left = /左|佐/.test(t) || custom(nL);
-    const right = /右|佑/.test(t) || custom(nR);
-    if (left && !right) return "L";
-    if (right && !left) return "R";
-    return null;
+  let sessionStart = 0, lastActivity = 0, done = {};   // done[resultIndex] = commands already acted on in that result
+  function norm(s) { return String(s).replace(/[\s，。,.!！?？、:：；;「」"'~～]/g, ""); }
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Common mishearings are accepted only together with 邊 (e.g. 有邊 → 右邊), so chatter like 「有」 does not score.
+  const LEFT = "(?:左邊?|[佐做坐作座]邊)";
+  const RIGHT = "(?:右邊?|[佑有又友幼柚右]邊)";
+  function commandRegex() {
+    const req = cfg.requireScore ? "得分" : "";
+    const tn = (t) => { const n = norm(teamName(t)); return n && !/^(左邊隊|右邊隊)$/.test(n) ? esc(n) : null; };
+    const nl = tn(g.leftTeam), nr = tn(1 - g.leftTeam);
+    const parts = [
+      "(取消|上一分|退回|撤銷|撤回|收回)",
+      "(" + LEFT + req + (nl ? "|" + nl + req : "") + ")",
+      "(" + RIGHT + req + (nr ? "|" + nr + req : "") + ")"
+    ];
+    return new RegExp(parts.join("|"), "g");
   }
-  function onHeard(text, final) {
+  // All commands in a transcript, in the order spoken.
+  function commandsIn(text) {
+    const t = norm(text), out = [];
+    if (!t || !g) return out;
+    const re = commandRegex(); let m;
+    while ((m = re.exec(t))) out.push(m[1] ? "undo" : m[2] ? "L" : "R");
+    return out;
+  }
+  function showHeard(text, final) {
     const h = $("heard"); h.textContent = "";
     h.appendChild(document.createTextNode(final ? "聽到：" : "聽到…"));
     const b = document.createElement("b"); b.textContent = text; h.appendChild(b);
-    if (!final) return;
-    if (Date.now() < speakingUntil) return;          // ignore our own voice
-    if (Date.now() - lastCmd < 1200) return;          // ignore double triggers
-    const c = interpret(text);
-    if (!c) { flash("沒聽懂「" + text + "」，請說「左邊」、「右邊」或「取消」"); return; }
-    lastCmd = Date.now();
+  }
+  function act(c) {
+    lastCmd = Date.now(); flash("");
     if (c === "undo") undo(); else addPoint(c, "voice");
   }
+  // Called for interim and final results alike: act as soon as a full command appears, don't wait for the sentence to end.
+  function handle(i, text, final) {
+    lastActivity = Date.now();
+    showHeard(text, final);
+    if (Date.now() < speakingUntil) { done[i] = Infinity; return; }   // our own voice: skip this whole result
+    const cmds = commandsIn(text);
+    const seen = done[i] || 0;
+    if (cmds.length > seen) {
+      done[i] = cmds.length;
+      const c = cmds[cmds.length - 1];
+      if (Date.now() - lastCmd >= 1200) { act(c); restartSoon(); }
+      return;
+    }
+    if (final && !cmds.length && norm(text).length <= 8 && /[左右邊得分佐做坐作座佑有又友幼柚]/.test(norm(text))) {
+      flash("沒聽懂「" + text + "」，請說「" + (cfg.requireScore ? "左邊得分」、「右邊得分" : "左邊」、「右邊") + "」或「取消」");
+    }
+  }
+  // Clear the recogniser so a long stretch of chatter can't hold it up.
+  let restartTimer = 0;
+  function restartSoon() {
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(() => { if (listening && rec) { try { rec.abort(); } catch (e) {} } }, 300);
+  }
+  setInterval(() => {
+    if (!listening || !rec) return;
+    const now = Date.now();
+    if (now - sessionStart > 12000 && now - lastActivity > 1200) { sessionStart = now; try { rec.abort(); } catch (e) {} }
+  }, 1000);
   function startRec() {
     if (!SR) { flash("這個瀏覽器不支援語音辨識，請改用 Chrome 或 Safari，或直接點畫面加分"); return; }
     rec = new SR();
@@ -373,15 +407,14 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
     rec.continuous = true;
     rec.interimResults = true;
     rec.maxAlternatives = 3;
+    rec.onstart = () => { sessionStart = Date.now(); done = {}; };
     rec.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
-        if (r.isFinal) {
-          // take the first alternative that means something
-          let pick = r[0].transcript;
-          for (let k = 0; k < r.length; k++) if (interpret(r[k].transcript)) { pick = r[k].transcript; break; }
-          onHeard(pick.trim(), true);
-        } else onHeard(r[0].transcript.trim(), false);
+        // prefer the alternative that contains a command
+        let pick = r[0].transcript;
+        for (let k = 0; k < r.length; k++) if (commandsIn(r[k].transcript).length) { pick = r[k].transcript; break; }
+        handle(i, pick.trim(), r.isFinal);
       }
     };
     rec.onerror = (e) => {
@@ -389,15 +422,16 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
       else if (e.error === "network") flash("語音辨識需要網路，目前連不上。可以先直接點畫面加分");
       else if (e.error === "audio-capture") { setMic(false); flash("找不到麥克風"); }
     };
-    rec.onend = () => { if (listening) setTimeout(() => { if (listening) { try { rec.start(); } catch (e) {} } }, 250); };
+    rec.onend = () => { if (listening) setTimeout(() => { if (listening && rec) { try { rec.start(); } catch (e) {} } }, 150); };
     try { rec.start(); } catch (e) {}
   }
+  function cmdHint() { return cfg.requireScore ? "請說「左邊得分」、「右邊得分」或「取消」" : "請說「左邊」、「右邊」或「取消」"; }
   function setMic(on) {
     listening = on;
     $("mic").setAttribute("aria-pressed", on);
     $("mic").textContent = on ? "語音開啟中" : "開啟語音";
-    if (on) { $("heard").textContent = "請說「左邊」、「右邊」或「取消」"; startRec(); }
-    else { try { rec && rec.abort(); } catch (e) {} rec = null; $("heard").textContent = "語音已關閉，可以直接點畫面加分"; }
+    if (on) { $("heard").textContent = cmdHint(); startRec(); }
+    else { const r = rec; rec = null; try { r && r.abort(); } catch (e) {} $("heard").textContent = "語音已關閉，可以直接點畫面加分"; }
   }
 
   // ---------- wake lock ----------
@@ -439,6 +473,14 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
     $("deuce").checked = cfg.deuce; $("cap").value = cfg.cap; $("capRow").hidden = !cfg.deuce;
     [...$("srvSeg").children].forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === cfg.first));
     $("tts").checked = cfg.tts;
+    $("req").checked = cfg.requireScore;
+    const cl = $("cmdList"); cl.innerHTML = "";
+    const sfx = cfg.requireScore ? "得分" : "";
+    [["左邊" + sfx, "左邊加 1 分"], ["右邊" + sfx, "右邊加 1 分"], ["取消", "退回上一分（也可以說「上一分」）"]].forEach(([w, d]) => {
+      const li = document.createElement("li"); li.appendChild(document.createTextNode("「"));
+      const b = document.createElement("b"); b.textContent = w; li.appendChild(b);
+      li.appendChild(document.createTextNode("」：" + d)); cl.appendChild(li);
+    });
     $("ruleNote").textContent = cfg.deuce
       ? "先到 " + cfg.target + " 分；" + (cfg.target - 1) + " 平之後要領先 2 分，最多打到 " + cfg.cap + " 分（先到 " + cfg.cap + " 分的贏）。"
       : "先到 " + cfg.target + " 分就贏，不延長。";
@@ -485,6 +527,7 @@ input[type="text"], input[type="number"] { width: 100%; background: var(--bg); b
   $("cap").addEventListener("change", () => { cfg.cap = Math.max(cfg.target, Math.min(60, parseInt($("cap").value, 10) || cfg.target)); save(); renderSetup(); });
   $("srvSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; cfg.first = b.dataset.v; save(); renderSetup(); });
   $("tts").addEventListener("change", () => { cfg.tts = $("tts").checked; save(); });
+  $("req").addEventListener("change", () => { cfg.requireScore = $("req").checked; save(); renderSetup(); });
   $("start").addEventListener("click", () => {
     newGame(); showGame(true);
     // speech synthesis on iOS must be unlocked from a tap
